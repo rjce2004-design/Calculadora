@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calculadora por capas</title>
+<style>
+  :root {
+    --bg: #eef1f0; --card: #ffffff; --ink: #14211f; --muted: #5d6d6a;
+    --line: #d7dfdd; --accent: #0f766e; --accent-ink: #ffffff;
+    --signal: #d97706; --ok: #15803d; --err: #b91c1c;
+    --display: #14211f; --display-ink: #f2f7f6; --code: #f3f6f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1514; --card: #162120; --ink: #e6efed; --muted: #8fa3a0;
+      --line: #263634; --accent: #2dd4bf; --accent-ink: #062b27;
+      --signal: #fbbf24; --ok: #4ade80; --err: #f87171;
+      --display: #0a1110; --display-ink: #f2f7f6; --code: #0e1514;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 20px 56px; }
+  header { margin-bottom: 24px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--muted); max-width: 62ch; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  .card + .card { margin-top: 20px; }
+  h2 { font-size: 1.05rem; margin: 0 0 14px; }
+  .tag { font-size: .8rem; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+         padding: 2px 9px; border-radius: 99px; margin-left: 8px; vertical-align: middle; }
+
+  /* Pantalla de resultado */
+  .display { background: var(--display); color: var(--display-ink); border-radius: 10px; padding: 16px 18px; min-height: 104px;
+             display: flex; flex-direction: column; justify-content: flex-end; text-align: right; margin-bottom: 18px; }
+  .display .expr { color: #9db3af; font-size: .95rem; min-height: 1.4em; overflow-wrap: anywhere; }
+  .display .value { font-size: 2.4rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; line-height: 1.15; }
+  .display .value.error { font-size: 1.1rem; font-weight: 500; color: #fca5a5; }
+
+  label.field { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 4px; }
+  .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  input[type=number] {
+    width: 100%; padding: 11px 12px; font-size: 1.05rem; color: var(--ink); background: var(--card);
+    border: 1px solid var(--line); border-radius: 8px; font-variant-numeric: tabular-nums;
+  }
+  input[type=number]:disabled { opacity: .45; }
+  input:focus-visible, button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 1px; }
+
+  .ops { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin-bottom: 18px; }
+  .op { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid var(--line); background: var(--card);
+        color: var(--ink); border-radius: 8px; cursor: pointer; font: inherit; font-size: .88rem; text-align: left; }
+  .op b { font-size: 1.05rem; min-width: 1.6em; text-align: center; color: var(--accent); }
+  .op:hover { border-color: var(--accent); }
+  .op[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .op[aria-pressed=true] b { color: inherit; }
+
+  .primary { width: 100%; padding: 13px; font: inherit; font-weight: 600; font-size: 1rem; border: 0; border-radius: 8px;
+             background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+  .primary:hover { filter: brightness(1.08); }
+  .primary:disabled { opacity: .6; cursor: progress; }
+  .link { background: none; border: 0; color: var(--muted); cursor: pointer; font: inherit; font-size: .85rem; text-decoration: underline; }
+
+  .banner { display: none; margin-bottom: 16px; padding: 12px 14px; border-radius: 8px; background: color-mix(in srgb, var(--err) 12%, transparent);
+            border: 1px solid var(--err); color: var(--err); font-size: .92rem; }
+
+  /* Historial */
+  .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .head h2 { margin: 0; }
+  #historial { list-style: none; margin: 0; padding: 0; max-height: 210px; overflow-y: auto; }
+  #historial li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  #historial li span:last-child { color: var(--muted); font-size: .82rem; white-space: nowrap; }
+  .empty { color: var(--muted); font-size: .92rem; margin: 6px 0 0; }
+
+  /* Recorrido de la petición */
+  .trace { list-style: none; margin: 0; padding: 0; position: relative; }
+  .trace li { position: relative; padding: 0 0 22px 46px; }
+  .trace li:last-child { padding-bottom: 0; }
+  .trace li::before { content: ""; position: absolute; left: 15px; top: 32px; bottom: 0; width: 2px; background: var(--line); }
+  .trace li:last-child::before { display: none; }
+  .dot { position: absolute; left: 0; top: 0; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+         font-weight: 700; font-size: .9rem; background: var(--card); border: 2px solid var(--line); color: var(--muted); }
+  .trace li.active .dot { border-color: var(--signal); color: var(--signal); box-shadow: 0 0 0 5px color-mix(in srgb, var(--signal) 20%, transparent); }
+  .trace li.done .dot { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .trace li.fail .dot { background: var(--err); border-color: var(--err); color: #fff; }
+  .trace h3 { margin: 0; font-size: .98rem; line-height: 32px; }
+  .trace h3 small { font-weight: 400; color: var(--muted); margin-left: 6px; }
+  .trace p { margin: 2px 0 0; color: var(--muted); font-size: .9rem; }
+  pre { margin: 8px 0 0; padding: 10px 12px; background: var(--code); border: 1px solid var(--line); border-radius: 8px;
+        font: .82rem/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; overflow-x: auto; color: var(--ink); }
+  .route { margin-top: 6px; font: .82rem ui-monospace, "Cascadia Code", Consolas, monospace; color: var(--ink); overflow-wrap: anywhere; }
+  .route b { color: var(--accent); }
+  .status.ok { color: var(--ok); font-weight: 600; }
+  .status.bad { color: var(--err); font-weight: 600; }
+  @media (prefers-reduced-motion: no-preference) {
+    .dot, .trace li::before { transition: all .25s ease; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Calculadora por capas</h1>
+  </header>
+
+  <div class="banner" id="banner" role="alert">
+    No se pudo conectar con el backend. Revisa que <code>python app.py</code> esté corriendo en el puerto 5000.
+  </div>
+
+  <div class="layout">
+    <!-- ========== PRESENTACIÓN (UI) ========== -->
+    <div>
+      <section class="card" aria-label="Calculadora">
+        <h2>Calculadora <span class="tag">Interfaz · puerto 3000</span></h2>
+
+        <div class="display" aria-live="polite">
+          <div class="expr" id="expr">Ingrese los números</div>
+          <div class="value" id="valor">0</div>
+        </div>
+
+        <div class="inputs">
+          <div>
+            <label class="field" for="a">Número A</label>
+            <input id="a" type="number" step="any" placeholder="0">
+          </div>
+          <div>
+            <label class="field" for="b">Número B</label>
+            <input id="b" type="number" step="any" placeholder="0">
+          </div>
+        </div>
+
+        <div class="ops" id="ops" role="group" aria-label="Operaciones"></div>
+
+        <button class="primary" id="calcular" onclick="enviar()">Calcular</button>
+      </section>
+
+      <section class="card" aria-label="Historial">
+        <div class="head">
+          <h2>Historial <span class="tag">Se guarda en el backend :D</span></h2>
+          <button class="link" onclick="borrarHistorial()">Borrar</button>
+        </div>
+        <ul id="historial"></ul>
+        <p class="empty" id="vacio">Aún no hay cálculos.</p>
+      </section>
+    </div>
+
+    <!-- ========== RECORRIDO DE LA PETICIÓN ========== -->
+    <section class="card" aria-label="Recorrido de la petición">
+      <h2>Qué pasa al calcular</h2>
+      <ol class="trace" id="trace">
+        <li id="p1">
+          <span class="dot">1</span>
+          <h3>La interfaz toma los datos <small>frontend</small></h3>
+          <p id="t1">Esperando un cálculo.</p>
+        </li>
+        <li id="p2">
+          <span class="dot">2</span>
+          <h3>Se envía la petición <small>HTTP</small></h3>
+          <div class="route" id="t2route"></div>
+          <pre id="req">-</pre>
+        </li>
+        <li id="p3">
+          <span class="dot">3</span>
+          <h3>El backend procesa <small>Flask + logica.py</small></h3>
+          <p id="t3">Flask recibe la ruta y llama a la capa de lógica.</p>
+        </li>
+        <li id="p4">
+          <span class="dot">4</span>
+          <h3>Responde a la interfaz <small>JSON</small></h3>
+          <div class="route" id="t4route"></div>
+          <pre id="res">-</pre>
+        </li>
+      </ol>
+    </section>
+  </div>
+</div>
+
+<script>
+  const API = ["127.0.0.1", "localhost"].includes(location.hostname)
+  ? "http://127.0.0.1:5000/api"
+  : "https://calculadora.onrender.com/api";
+  let operaciones = {};
+  let seleccion = "sumar";
+
+  const $ = id => document.getElementById(id);
+  const esperar = ms => new Promise(r => setTimeout(r, ms));
+
+  function conexionPerdida(perdida) {
+    $("banner").style.display = perdida ? "block" : "none";
+  }
+
+  /* ---------- Operaciones (las define el backend) ---------- */
+  async function cargarOperaciones() {
+    try {
+      const r = await fetch(`${API}/operaciones`);
+      operaciones = await r.json();
+      conexionPerdida(false);
+    } catch (e) {
+      conexionPerdida(true);
+      return;
+    }
+    const cont = $("ops");
+    cont.innerHTML = "";
+    for (const [clave, op] of Object.entries(operaciones)) {
+      const btn = document.createElement("button");
+      btn.className = "op";
+      btn.type = "button";
+      btn.dataset.clave = clave;
+      btn.innerHTML = `<b>${op.simbolo}</b><span>${op.nombre}</span>`;
+      btn.onclick = () => elegir(clave);
+      cont.appendChild(btn);
+    }
+    elegir(operaciones[seleccion] ? seleccion : Object.keys(operaciones)[0]);
+  }
+
+  function elegir(clave) {
+    seleccion = clave;
+    document.querySelectorAll(".op").forEach(b =>
+      b.setAttribute("aria-pressed", b.dataset.clave === clave));
+    const unaria = operaciones[clave].unaria;
+    $("b").disabled = unaria;
+    if (unaria) $("b").value = "";
+  }
+
+  /* ---------- Recorrido de la petición ---------- */
+  function marcar(n, estado) {
+    $("p" + n).className = estado || "";
+  }
+  function reiniciarRecorrido() {
+    [1, 2, 3, 4].forEach(n => marcar(n, ""));
+  }
+
+  /* ---------- Calcular ---------- */
+  async function enviar() {
+    if (!Object.keys(operaciones).length) { await cargarOperaciones(); if (!Object.keys(operaciones).length) return; }
+
+    const op = operaciones[seleccion];
+    const payload = { a: $("a").value, operacion: seleccion };
+    if (!op.unaria) payload.b = $("b").value;
+
+    const expr = op.unaria
+      ? `${op.simbolo}(${payload.a || "?"})`
+      : `${payload.a || "?"} ${op.simbolo} ${payload.b || "?"}`;
+
+    $("calcular").disabled = true;
+    reiniciarRecorrido();
+    $("req").textContent = JSON.stringify(payload, null, 2);
+    $("res").textContent = "-";
+    $("t4route").textContent = "";
+    $("t3").textContent = "Flask recibe la ruta y llama a la capa de lógica.";
+
+    // Paso 1: la UI toma los datos
+    marcar(1, "active");
+    $("t1").textContent = `Leyó ${expr} y armó la petición.`;
+    await esperar(350);
+    marcar(1, "done");
+
+    // Paso 2: se envía la petición
+    marcar(2, "active");
+    $("t2route").innerHTML = `<b>POST</b> ${API}/calcular`;
+    await esperar(350);
+
+    let data, status, ms;
+    try {
+      const t0 = performance.now();
+      const r = await fetch(`${API}/calcular`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      data = await r.json();
+      status = r.status;
+      ms = Math.round(performance.now() - t0);
+      conexionPerdida(false);
+    } catch (e) {
+      marcar(2, "fail");
+      conexionPerdida(true);
+      $("valor").className = "value error";
+      $("valor").textContent = "Sin conexión con el backend";
+      $("expr").textContent = expr;
+      $("res").textContent = "No hubo respuesta.";
+      $("calcular").disabled = false;
+      return;
+    }
+    marcar(2, "done");
+
+    // Paso 3: el backend procesó
+    marcar(3, "active");
+    const args = op.unaria ? `${payload.a}, ${JSON.stringify(seleccion)}` : `${payload.a}, ${payload.b}, ${JSON.stringify(seleccion)}`;
+    $("t3").innerHTML = `Flask llamó a <code>calcular(${args})</code> en <code>logica.py</code> y tardó ${ms} ms en total.`;
+    await esperar(350);
+    marcar(3, data.ok ? "done" : "fail");
+
+    // Paso 4: respuesta
+    marcar(4, "active");
+    const clase = data.ok ? "ok" : "bad";
+    $("t4route").innerHTML = `Estado <span class="status ${clase}">${status} ${data.ok ? "OK" : "Error controlado"}</span>`;
+    $("res").textContent = JSON.stringify(data, null, 2);
+    await esperar(350);
+    marcar(4, data.ok ? "done" : "fail");
+
+    // Resultado en la pantalla
+    $("expr").textContent = expr + (data.ok ? " =" : "");
+    const valor = $("valor");
+    valor.className = data.ok ? "value" : "value error";
+    valor.textContent = data.ok ? data.resultado : data.error;
+
+    $("calcular").disabled = false;
+    cargarHistorial();
+  }
+
+  /* ---------- Historial ---------- */
+  async function cargarHistorial() {
+    let items = [];
+    try { items = await (await fetch(`${API}/historial`)).json(); } catch (e) { return; }
+    const ul = $("historial");
+    ul.innerHTML = "";
+    $("vacio").style.display = items.length ? "none" : "block";
+    items.slice().reverse().forEach(h => {
+      const op = operaciones[h.operacion] || { simbolo: h.operacion, unaria: h.b === null };
+      const texto = op.unaria
+        ? `${op.simbolo}(${h.a}) = ${h.resultado}`
+        : `${h.a} ${op.simbolo} ${h.b} = ${h.resultado}`;
+      const li = document.createElement("li");
+      const t = document.createElement("span"); t.textContent = texto;
+      const hora = document.createElement("span"); hora.textContent = h.hora;
+      li.append(t, hora);
+      ul.appendChild(li);
+    });
+  }
+
+  async function borrarHistorial() {
+    try { await fetch(`${API}/historial`, { method: "DELETE" }); } catch (e) {}
+    cargarHistorial();
+  }
+
+  /* Enter también calcula */
+  document.addEventListener("keydown", e => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT") enviar();
+  });
+
+  cargarOperaciones().then(cargarHistorial);
+</script>
+</body>
+</html>
